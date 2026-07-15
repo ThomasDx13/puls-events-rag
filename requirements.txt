@@ -1,3 +1,11 @@
+# Fichier de LOCK (pip freeze) : toutes les dépendances, directes et
+# transitives, épinglées à une version exacte pour une installation
+# reproductible à l'identique.
+# -> Pour voir uniquement les dépendances directes choisies pour ce projet,
+#    voir requirements.in
+#
+# Installation : pip install -r requirements.txt
+
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.1
 aiosignal==1.4.0

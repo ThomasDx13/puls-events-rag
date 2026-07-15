@@ -68,8 +68,22 @@ Tous les imports ont réussi. L'environnement est prêt.
 | `pandas`              | Manipulation des données Open Agenda avant vectorisation    |
 | `python-dotenv`       | Chargement de la clé API Mistral depuis un fichier `.env`   |
 
-La liste complète (avec sous-dépendances, pour une reproductibilité stricte)
-est disponible dans `requirements.txt`, généré via `pip freeze`.
+Deux fichiers de dépendances, à deux niveaux :
+
+- **`requirements.in`** — les dépendances *directes*, celles réellement
+  importées dans le code (liste lisible, avec commentaires).
+- **`requirements.txt`** — le fichier de *lock* (`pip freeze`), toutes les
+  dépendances (directes + transitives) épinglées à une version exacte. C'est
+  celui-ci qu'on installe (`pip install -r requirements.txt`) pour garantir
+  que l'environnement est identique quelle que soit la machine.
+
+Après ajout/modification d'une dépendance directe dans `requirements.in`,
+regénérer le lock avec :
+
+```bash
+pip install -r requirements.in
+pip freeze > requirements.txt
+```
 
 ### ⚠️ Point de vigilance corrigé
 

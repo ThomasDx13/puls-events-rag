@@ -1,0 +1,15 @@
+# Dépendances DIRECTES du projet (celles que le code importe explicitement).
+# Ce fichier documente les choix techniques ; il n'est pas utilisé pour
+# l'installation reproductible (voir requirements.txt pour ça).
+#
+# Pour regénérer requirements.txt après une modification de ce fichier :
+#   ./venv/bin/pip install -r requirements.in
+#   ./venv/bin/pip freeze > requirements.txt
+
+langchain              # orchestration du pipeline RAG
+langchain-community    # loaders / intégrations tierces pour LangChain
+langchain-mistralai    # intégration officielle LangChain <-> Mistral (LLM + embeddings)
+mistralai              # client Python officiel de l'API Mistral
+faiss-cpu              # base vectorielle (recherche de similarité), backend CPU
+pandas                 # nettoyage / filtrage des données Open Agenda
+python-dotenv          # chargement de la clé API Mistral depuis .env
