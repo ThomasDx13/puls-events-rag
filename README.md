@@ -11,7 +11,7 @@ Stack : **LangChain** (orchestration) · **Mistral** (LLM + embeddings) ·
 
 ## 1. Prérequis
 
-- Python 3.10 ou supérieur (testé avec Python 3.12)
+- Python 3.10 ou supérieur (testé avec Python 3.12 et 3.14)
 - pip
 - Une clé API Mistral (à obtenir sur [console.mistral.ai](https://console.mistral.ai)) —
   nécessaire à partir de l'étape d'intégration du LLM, pas pour cette étape 1.
@@ -99,7 +99,28 @@ recommande de migrer vers des packages d'intégration autonomes). Ça n'empêche
 rien pour ce POC, mais si un loader spécifique de `langchain-community` est
 utilisé plus tard, il faudra vérifier s'il existe une alternative dédiée.
 
-## 5. Structure du projet (mise en place, sera complétée aux étapes suivantes)
+## 5. Dépannage (Windows)
+
+**Le premier `python test_environment.py` (ou toute première utilisation du
+venv) semble bloqué / très lent, notamment sur l'import de `langchain_mistralai`
+ou `httpx`.**
+
+C'est l'antivirus (Windows Defender ou équivalent) qui scanne chaque nouveau
+fichier du venv à son premier accès — un venv installe plusieurs milliers de
+petits fichiers d'un coup. Une fois le scan fait, les exécutions suivantes
+sont normales. Si c'est trop long ou bloque vraiment :
+- Relancer simplement le script une seconde fois.
+- Si ça persiste, exclure le dossier du projet du scan temps réel :
+  Windows Sécurité → Protection contre les virus et menaces → Gérer les
+  paramètres → Exclusions → Ajouter un dossier (le dossier du projet).
+
+**Éviter aussi de placer le projet dans un dossier synchronisé par
+OneDrive/Google Drive/Dropbox** (ex. `Bureau`, `Documents` si la synchronisation
+est activée dessus) : un venv contient trop de petits fichiers pour ces
+outils de synchronisation, ce qui peut causer des lenteurs ou blocages
+similaires, voire des erreurs liées à la limite de longueur de chemin Windows.
+
+## 6. Structure du projet (mise en place, sera complétée aux étapes suivantes)
 
 ```
 puls-events-rag/
@@ -117,7 +138,7 @@ puls-events-rag/
 └── README.md
 ```
 
-## 6. Statut
+## 7. Statut
 
 - [x] Étape 1 — Environnement de développement (venv, dépendances, vérification)
 - [ ] Étape 2 — Extraction et pré-traitement des données Open Agenda
