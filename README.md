@@ -101,7 +101,7 @@ utilisé plus tard, il faudra vérifier s'il existe une alternative dédiée.
 
 ## 5. Dépannage (Windows)
 
-**Le premier `python test_environment.py` (ou toute première utilisation du
+**Le premier `python check_environment.py` (ou toute première utilisation du
 venv) semble bloqué / très lent, notamment sur l'import de `langchain_mistralai`
 ou `httpx`.**
 
@@ -134,7 +134,7 @@ puls-events-rag/
 ├── notebooks/             # explorations ponctuelles
 ├── reports/               # rapport technique, présentation
 ├── requirements.txt
-├── test_environment.py    # script de contrôle de l'environnement
+├── check_environment.py    # script de contrôle de l'environnement
 └── README.md
 ```
 
