@@ -1,0 +1,15 @@
+# Environnement virtuel
+venv/
+__pycache__/
+*.pyc
+
+# Variables d'environnement / secrets
+.env
+
+# Données et index vectoriel (regénérables via les scripts)
+data/raw/
+data/processed/
+vector_store/
+
+# Fichiers système
+.DS_Store
