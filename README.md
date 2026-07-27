@@ -764,3 +764,46 @@ streamlit run streamlit_app.py
   le même fichier). Cause précise non confirmée à ce stade — diagnostic
   proposé (`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
 
+## 9. Structure du projet (mise en place, sera complétée aux étapes suivantes)
+
+```
+puls-events-rag/
+├── venv/                 # environnement virtuel (non versionné)
+├── src/
+│   ├── config.py           # constantes centralisées (périmètre géo, dates, vectorisation, chemins)
+│   ├── fetch_raw_data.py   # extraction brute depuis l'API Opendatasoft
+│   ├── preprocess.py       # nettoyage, revalidation, structuration
+│   ├── vectorize.py        # chunking + vectorisation Mistral
+│   ├── build_faiss_index.py  # construction de l'index Faiss
+│   ├── chatbot.py           # pipeline RAG (chaînes LCEL, recherche hybride, garde-fou)
+│   ├── chat_cli.py          # interface en ligne de commande (base démo live)
+│   └── analyse_vocabulaire.py  # diagnostic : vocabulaire hybride trié par fréquence (8.4)
+├── data/
+│   ├── raw/               # données brutes Open Agenda téléchargées (non versionné)
+│   └── processed/         # events.json, chunks.json, embeddings.npy (non versionné)
+├── vector_store/          # index Faiss (non versionné, régénérable via build_faiss_index.py)
+├── tests/
+│   ├── test_preprocess.py       # tests unitaires purs (logique de filtre)
+│   ├── test_data_quality.py     # validation des vraies données indexées
+│   ├── test_faiss_index.py      # complétude, pertinence, vitesse de l'index Faiss
+│   └── test_chatbot_scenarios.py  # scénarios d'interaction (pertinent/hors-sujet/vague)
+├── notebooks/             # explorations ponctuelles
+├── reports/               # rapport technique, présentation
+├── requirements.in         # dépendances directes (lisible)
+├── requirements.txt        # lock complet (pip freeze)
+├── .env.example            # modèle pour MISTRAL_API_KEY / HF_TOKEN
+├── check_environment.py    # script de contrôle de l'environnement
+├── streamlit_app.py        # interface web du chatbot (8.9), réutilise ask() de src/chatbot.py
+└── README.md
+```
+
+## 10. Statut
+
+- [x] Étape 1 — Environnement de développement (venv, dépendances, vérification)
+- [x] Étape 2 — Extraction, pré-traitement, vectorisation Mistral et tests unitaires : 10 715 événements → 12 643 chunks vectorisés (Bordeaux Métropole, < 1 an) — détail en section 6
+- [x] Étape 3 — Indexation Faiss + vérifications d'efficacité/rapidité : 12 643 vecteurs indexés, recherche en 16,33 ms — détail en section 7
+- [x] Étape 4 — Pipeline RAG (retrieval hybride + génération Mistral, chaînes LCEL) — détail en section 8
+- [ ] Étape 5 — Jeu de test annoté (questions/réponses)
+- [ ] Étape 6 — Rapport technique
+- [ ] Étape 7 — Présentation PowerPoint
+- [ ] Étape 8 — Démo live
