@@ -13,3 +13,8 @@ mistralai              # client Python officiel de l'API Mistral
 faiss-cpu              # base vectorielle (recherche de similarité), backend CPU
 pandas                 # nettoyage / filtrage des données Open Agenda
 python-dotenv          # chargement de la clé API Mistral depuis .env
+requests                # appels HTTP à l'API Opendatasoft (extraction des données)
+beautifulsoup4          # nettoyage du HTML dans longdescription_fr
+numpy                    # manipulation de la matrice de vecteurs (vectorize.py)
+pytest                   # tests unitaires
+streamlit                 # interface web pour l'application RAG
