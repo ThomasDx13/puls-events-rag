@@ -435,3 +435,303 @@ coût API par lancement.
   peut différer du jour "vécu" en France pour un événement démarrant très tôt
   le matin ou très tard le soir heure de Paris.
 
+## 8. Chatbot RAG (étape 4)
+
+```bash
+python -m src.chat_cli
+streamlit run streamlit_app.py
+python -m pytest tests/test_chatbot_scenarios.py -v -s
+```
+
+### 8.1 Architecture — deux chaînes LCEL
+
+`src/chatbot.py` construit le pipeline avec LangChain Expression Language
+(l'opérateur `|`, qui chaîne des "Runnables" — voir le docstring en tête du
+fichier pour une explication pédagogique complète des concepts) :
+
+- **`retrieval_chain`** : question → `{"context": texte formaté, "sources":
+  [(Document, score, est_hybride), ...]}`. Recherche Faiss + recherche
+  hybride (8.4), dédoublonnage par événement.
+- **`generation_chain`** : `{"question", "context"}` → `AIMessage` complet
+  (pas juste le texte — nécessaire pour `.usage_metadata`, voir 8.5).
+  `prompt | modèle`, sans `StrOutputParser()`.
+
+`ask()` orchestre les deux et décide, en Python simple (pas dans la chaîne),
+si le garde-fou anti-hallucination (8.3) doit empêcher l'appel à Mistral.
+
+### 8.2 Modèle de génération
+
+**`mistral-medium-latest`** — `mistral-small-latest` n'est pas disponible
+sur le compte utilisé pour ce projet (vérifié sur la page des limites de La
+Plateforme). Alias `-latest` plutôt qu'une version datée : reste valide
+automatiquement quand Mistral sort une nouvelle version de cette gamme.
+Température fixée à 0.3 (peu de créativité, réponses ancrées sur le contexte
+fourni plutôt qu'improvisées).
+
+**Piste identifiée pour la suite, non implémentée** : `mistral-small-2506`
+est aussi disponible sur ce compte, avec des limites bien plus confortables
+(2 250 000 tokens/min, 5 req/s contre 25 000/0,83 pour medium) — à évaluer
+pour la génération principale ou pour un futur reranking LLM (voir 8.4).
+
+### 8.3 Garde-fou anti-hallucination
+
+Avant d'appeler Mistral, on vérifie qu'au moins un résultat est assez
+pertinent — sinon on renvoie directement un message standard, sans appeler
+le LLM. Logique révisée après plusieurs itérations :
+
+```python
+a_un_match_hybride = any(est_hybride for _, _, est_hybride in sources)
+meilleur_score_semantique = max(score pour les résultats NON hybrides, défaut 0.0)
+
+if not a_un_match_hybride and meilleur_score_semantique < RAG_RELEVANCE_THRESHOLD:
+    # message standard, Mistral jamais appelé
+```
+
+**Pourquoi cette forme précise** : un test réel (question hors-sujet
+"Quelle est la capitale de la France ?") a montré qu'**aucun seuil
+numérique ne sépare fiablement le pertinent du hors-sujet** sur ce
+dataset — des questions hors-sujet ont parfois un meilleur score sémantique
+que de vraies questions pertinentes (des quiz de culture générale
+scoraient plus haut qu'un concert metal réellement présent dans la base).
+Le seuil (`RAG_RELEVANCE_THRESHOLD = 0.5`) ne sert donc que de plancher pour
+les questions **sans aucun résultat hybride** — le vrai filtrage sémantique
+fin est délégué au prompt (voir règles dans `SYSTEM_PROMPT`), qui s'est
+montré fiable sur tous les scénarios testés. Un résultat hybride, lui,
+contourne complètement ce seuil : une correspondance exacte de mot-clé/date
+est une preuve de pertinence en soi, même si son score sémantique est
+mauvais (ce qui est fréquent et attendu pour ce type de résultat).
+
+### 8.4 Recherche hybride (mots-clés et dates exacts, en complément du sémantique)
+
+**Motivation** (section 7.2) : la recherche purement sémantique peut classer
+un événement réellement pertinent très loin (rang 3106/12 643 observé), donc
+hors de portée du contexte montré à Mistral, même si son score cosinus réel
+est correct. Solution : généraliser le filtrage exact par métadonnées (déjà
+utilisé pour les dates dans les tests de l'étape 3) et l'intégrer réellement
+au chatbot — pas seulement aux tests, comme c'était le cas dans une première
+version.
+
+**Mécanisme** :
+1. **Vocabulaire de mots-clés** construit une fois à l'import (lecture de
+   `chunks.json`), **filtré par fréquence** (`RAG_KEYWORD_MAX_FREQUENCY =
+   0.01`) : un mot-clé présent sur plus de 1% des événements est jugé trop
+   générique pour servir de déclencheur. Vérifié empiriquement le
+   19/07/2026 : "bordeaux" (12,6%), "musique"/"concert" (~3,5%) contre
+   "metal"/"métal" (0,25%) — séparation nette, sans mot-clé ambigu identifié
+   dans la zone intermédiaire.
+2. **Détection dans la question** : mots-clés connus (comparaison par
+   frontière de mot) + dates au format "JJ mois \[AAAA\]" en français (sans
+   année, suppose la prochaine occurrence à venir).
+3. **Normalisation casse + accents** (`unicodedata`, NFKD) appliquée à
+   3 endroits (vocabulaire, question, **et** mots-clés bruts de chaque
+   événement au moment du filtre — ce dernier point corrigeait un bug réel :
+   l'événement ASHEN avait le mot-clé `"Metal"` en majuscule, jamais reconnu
+   par une comparaison de chaînes sensible à la casse). `Metal`, `METAL`,
+   `métal`, `MÉTAL`... convergent tous vers `metal`.
+4. **Filtre exact sur l'index entier** (`fetch_k` = nombre total de chunks,
+   pas seulement le voisinage sémantique — même piège que 7.2).
+5. **Sous-plafond** `RAG_MAX_HYBRID_EVENTS = 5` (sur `RAG_MAX_EVENTS = 10`) :
+   empêche un mot-clé très présent de monopoliser tous les emplacements
+   finaux, garantit toujours de la place à la recherche sémantique classique.
+6. **Priorité, pas tri par score** : les résultats hybrides sont placés en
+   tête de liste avant dédoublonnage (pas triés avec les résultats
+   sémantiques par score — leur score est souvent mauvais par construction,
+   les trier ensemble les aurait exclus du top final).
+7. **Exclusion manuelle complémentaire au filtre de fréquence**
+   (`RAG_MOTS_CLES_EXCLUS`, config.py). Découvert le 27/07/2026 en testant
+   "cours de bachata" : le mot-clé `"cours"` (10 occurrences sur 12 414
+   chunks, donc largement sous le seuil de 1%) faisait remonter "Cours de
+   dessin" et "Cours de théâtre" comme résultats hybrides garantis, sans
+   rapport avec la question. Un mot peut rester rare en occurrences absolues
+   tout en étant non-discriminant, s'il est partagé par des catégories
+   d'événements sans rapport entre elles — le filtre de fréquence seul ne
+   suffit pas à le détecter. Diagnostic outillé : `src/analyse_vocabulaire.py`
+   (affiche le vocabulaire hybride actuel trié par fréquence, pour repérer
+   ce type de mot visuellement plutôt qu'à l'aveugle). Principe de sélection
+   retenu : les mots qui décrivent le FORMAT d'un événement (cours, atelier,
+   soirée, séance, concours, réunion...) sont non-discriminants par
+   construction — n'importe quel sujet peut se décliner en cours ou en
+   soirée — contrairement aux mots de CONTENU/GENRE (metal, bachata,
+   dessin...), qui restent le signal utile. **Volontairement exclus de cette
+   liste** : les noms de lieux/quartiers (ex. "pin galant", "musée
+   d'aquitaine") — une question du type "qu'est-ce qui se passe au Pin
+   Galant ?" est une demande légitime, les exclure casserait ce cas d'usage
+   (même raisonnement que pour les événements passés, voir 8.7).
+
+**Résultat vérifié** (19/07/2026, question "Un concert de musique métal à
+Bordeaux ?") : les 5 vrais concerts metal de la base (ASHEN, SOIRÉE METAL,
+Slipknot tribute, ANTHRAX, IGORRR, ULTRA VOMIT) sont désormais tous détectés
+et correctement recommandés par Mistral, qui ignore sans exception les
+résultats "bruit" (musique classique, fêtes...) toujours présents dans le
+contexte via les 5 emplacements sémantiques restants.
+
+### 8.5 Suivi de la consommation de tokens
+
+`ask()` retourne `usage: {"input_tokens", "output_tokens", "total_tokens"}`
+(extrait de `AIMessage.usage_metadata`, d'où l'absence de `StrOutputParser()`
+dans `generation_chain` — un parseur de sortie aurait réduit la réponse au
+texte seul et perdu cette métadonnée). Affiché après chaque échange dans
+`chat_cli.py` : utile vu la limite serrée du compte (25 000 tokens/min sur
+`mistral-medium-latest`).
+
+### 8.6 Tests (`tests/test_chatbot_scenarios.py`)
+
+Contrairement aux tests précédents, la justesse d'une réponse en langage
+naturel n'est pas vérifiable par un simple `assert` — pas de jeu de
+questions/réponses annoté pour comparer (ce sera l'objet de l'étape 5). Ce
+fichier vérifie donc ce qui EST automatisable (réponse non vide, sources
+trouvées, garde-fou qui se déclenche bien sur une question hors-sujet) et
+affiche le reste (`-s`) pour relecture humaine.
+
+### 8.7 Distinction événements passés / à venir
+
+**Bug rencontré (23/07/2026)** : sur une question type "un concert de metal
+ce mois-ci ?", un événement passé (28/03/2026) a été présenté par Mistral
+comme "le prochain concert" — alors que la date figurait correctement dans
+le contexte fourni. Cause : un LLM n'a pas d'horloge, chaque appel API est
+sans état ; sans qu'on lui donne explicitement la date du jour, Mistral n'a
+aucune donnée pour comparer une date d'événement à "maintenant".
+
+**Fix (23/07/2026)** : `{date_du_jour}` injecté dans `SYSTEM_PROMPT`, avec
+une règle de comparaison explicite. Calculé via `date.today().isoformat()`
+à **chaque appel** de `ask()` (pas au chargement du module) — le process
+Streamlit/CLI peut tourner plusieurs jours, une date figée à l'import serait
+vite obsolète.
+
+**Décision de conception importante** : le retrieval ne filtre JAMAIS par
+date. Un événement passé reste une réponse légitime à une question qui
+porte explicitement dessus (ex: "quel groupe jouait au bar X la semaine
+dernière ?") — un filtre "exclure le passé" côté recherche casserait ce cas
+d'usage. La distinction passé/à venir est donc entièrement déléguée au
+raisonnement de Mistral à la génération, pas au retrieval.
+
+**Affiné le 27/07/2026** : ajout d'une règle pour mentionner la prochaine
+occurrence à venir du même sujet quand rien ne correspond exactement à la
+période demandée (plutôt que de répondre "rien trouvé" alors qu'un
+événement pertinent existe plus tard dans le contexte). Un premier essai
+a mélangé un événement passé et un événement à venir sous un même intitulé
+("Le prochain concert est : [...ANTHRAX, déjà passé...] [...concert du
+14/11...]") — trompeur bien que chaque ligne soit individuellement correcte.
+Corrigé en exigeant des intitulés explicitement distincts ("le dernier en
+date était..." / "le prochain est..."), jamais regroupés sous un même
+en-tête ou une même liste.
+
+### 8.8 Fusion score sémantique + score lexical (TF-IDF)
+
+**Motivation** : le score sémantique seul se tasse parfois entre événements
+pertinents et non-pertinents (ex. observé le 25/07/2026 : "Fête cuivrée",
+un concert de cuivres sans rapport, à 0,77 contre un vrai concert de METAL
+à 0,74). Le reranking LLM, déjà écarté pour coût (voir 8.10), n'est pas la
+seule option : un score lexical déterministe, sans appel API, peut
+compléter le signal sémantique.
+
+**Formule**, appliquée à titre + mots-clés de chaque événement (pas la
+description complète — même raison que pour l'embedding en 6.3 : trop de
+texte non-discriminant dilue le signal) :
+
+```
+score_lexical = Σ TF(mot, évènement) × IDF(mot)   [mots communs question/évènement]
+                ─────────────────────────────────────────────────────────
+                Σ IDF(mot)                         [mots de la question]
+
+IDF(mot) = log(N_évènements_uniques / df(mot))
+TF(mot, évènement) ∈ {0, 1, 2} : +1 si présent dans le titre, +1 si présent
+                                  dans les mots-clés (pas un compte brut de
+                                  répétitions — titres/mots-clés trop courts
+                                  pour que ce soit un signal fiable)
+
+score_final = score_sémantique + RAG_POIDS_BONUS_LEXICAL × score_lexical
+```
+
+Remplace le score stocké dans les tuples `(doc, score, est_hybride)` —
+décision assumée : un seul score cohérent dans tout le pipeline (garde-fou,
+tri, affichage) plutôt que deux scores distincts. **Implication à
+surveiller** : `RAG_RELEVANCE_THRESHOLD` (8.3) a été calibré sur le score
+sémantique BRUT ; le bonus le fait mécaniquement remonter — un réajustement
+empirique n'a pas encore été fait, à vérifier à l'usage.
+
+Tokenisation MOT PAR MOT (via `_tokeniser()`), différente de 8.4 qui compare
+des mots-clés ENTIERS — ici chaque mot est pondéré séparément, pour capter
+un chevauchement partiel de vocabulaire que le filtre hybride exact ne
+verrait pas du tout. `df(mot)` compté par événement UNIQUE (dédoublonné par
+`uid`), pas par chunk (contrairement à 8.4 — corrigé dès l'écriture de ce
+code neuf, l'ancien choix n'a pas été retouché).
+
+**Leçon apprise en testant (27/07/2026), à noter honnêtement** : une
+première version sans liste de mots vides (stopwords) supposait que l'IDF
+suffirait à neutraliser les mots de liaison ("de", "la"...) automatiquement.
+Faux sur ce corpus : un test synthétique a montré que "de" garde un IDF non
+négligeable (apparaît dans ~50% d'un petit échantillon de titres "cours de
+X"), suffisant pour faire gagner "Cours de dessin" contre "Salbazouk" sur
+une question "cours de bachata" — l'inverse de l'effet recherché. Une petite
+liste de mots vides (`RAG_MOTS_VIDES`, config.py) a été réintroduite après
+ce test.
+
+**`RAG_FETCH_K` 20 → 100 (même date)** : la fusion ne peut re-classer QUE ce
+que Faiss remonte déjà dans le lot brut — elle ne fait jamais apparaître un
+événement absent de ce lot. "metal" concernant ~0,25% des chunks (19/07),
+soit une trentaine d'événements sur ~12 643, un lot de 20 était trop court
+pour tous les voir. Recherche Faiss locale (pas d'appel API), coût quasi nul
+même à 100 ; `RAG_MAX_EVENTS` (10) inchangé, aucun impact sur les tokens
+envoyés à Mistral.
+
+**Résultats vérifiés (27/07/2026)** :
+- "cours de bachata" : "Cours de dessin"/"Cours de théâtre" disparaissent
+  des résultats sémantiques, Salbazouk (vrai match bachata) score au-dessus
+- "Un concert de musique métal à Bordeaux ce mois-ci ?" : le score final
+  passe à 1,040 pour un vrai concert metal contre 0,832 pour "Fête cuivrée"
+  (avec les scores sémantiques bruts réels 0,74/0,77) — l'ordre s'inverse
+  comme attendu
+
+**Limite ouverte, non résolue à ce stade** : sur la même question metal,
+les résultats *purement sémantiques* (hors hybride) restent dominés par des
+événements dont le titre contient "concert"/"musique" au sens large (déjà
+identifiés le 19/07 comme trop génériques pour le filtre hybride, mais la
+table IDF de la fusion lexicale ne "connaît" pas cette leçon-là — deux
+mécanismes de généricité distincts dans le même fichier). Cause précise non
+confirmée : soit ces mots ont un IDF trop faible pour être neutralisés,
+soit le lot brut Faiss (même élargi à 100) ne contient simplement aucun
+autre événement metal à ce rang. Test de diagnostic proposé
+(`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
+
+### 8.10 Limitations connues et pistes pour la version finale
+
+- **Reranking LLM envisagé, écarté pour ce POC.** `mistralai-search-toolkit`
+  propose un `LLMReRanker` (un modèle de chat reprompté pour juger la
+  pertinence de chaque candidat individuellement) — mais son coût ("1 appel
+  LLM par chunk" selon la doc officielle) le rendait irréaliste sur
+  `mistral-medium-latest` (0,83 req/s). Redevient budgétairement réaliste
+  avec `mistral-small-2506` (5 req/s), mais écarté du scope de ce POC malgré
+  tout (décision du 27/07/2026). Une alternative sans appel API — fusion
+  score sémantique + score lexical TF-IDF — a été implémentée à la place,
+  voir 8.8 ; elle améliore le classement sans le résoudre complètement (voir
+  limite ouverte dans cette même section). Un `CrossEncoderReRanker` existe
+  aussi dans le même toolkit, mais nécessite d'héberger soi-même un modèle
+  cross-encoder — hors scope pour ce POC.
+- **La recherche hybride ne couvre que mots-clés et dates.** D'autres
+  critères précis (prix exact, tranche d'âge, accessibilité PMR...) restent
+  soumis aux limites de la recherche sémantique pure si un jour ils
+  s'avèrent nécessaires.
+- **Détection de date limitée au format explicite "JJ mois \[AAAA\]".** Les
+  dates relatives ("ce week-end", "demain", "en novembre" sans jour précis)
+  ne sont pas gérées — hors scope pour ce POC (cf. discussion), à couvrir
+  si le besoin se confirme à l'usage.
+- **Vocabulaire de mots-clés (et sa liste d'exclusion, 8.4) figés à l'import
+  du module.** Si `vectorize.py` est relancé (nouvelles données) sans
+  redémarrer le chatbot, le vocabulaire de déclenchement de la recherche
+  hybride — et la table IDF de la fusion lexicale (8.8), même limitation —
+  restent ceux de l'ancienne extraction — cas jugé trop marginal pour la
+  complexité d'un rafraîchissement dynamique dans un POC.
+- **`RAG_RELEVANCE_THRESHOLD` (8.3) calibré sur le score sémantique BRUT,
+  pas encore réajusté depuis l'ajout du bonus lexical (8.8, 27/07/2026).**
+  Le score comparé à ce seuil inclut désormais le bonus, qui le fait
+  mécaniquement remonter — un réajustement empirique reste à faire.
+- **Score sémantique encore imparfait sur du vocabulaire générique partagé
+  ("concert", "musique"), même après la fusion lexicale (27/07/2026).** Sur
+  une question metal, les résultats purement sémantiques restent dominés
+  par des événements dont le titre contient ces mots au sens large — la
+  table IDF de la fusion (8.8) ne "connaît" pas la leçon du 19/07 sur ces
+  mots-clés trop génériques (deux mécanismes de généricité distincts dans
+  le même fichier). Cause précise non confirmée à ce stade — diagnostic
+  proposé (`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
+
