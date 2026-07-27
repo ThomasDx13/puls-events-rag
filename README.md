@@ -694,6 +694,35 @@ soit le lot brut Faiss (même élargi à 100) ne contient simplement aucun
 autre événement metal à ce rang. Test de diagnostic proposé
 (`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
 
+### 8.9 Interface web (Streamlit)
+
+En complément de `chat_cli.py`, `streamlit_app.py` (racine du projet, pas
+dans `src/`) expose le chatbot dans une interface web via
+`st.chat_input`/`st.chat_message`. Réutilise directement `ask()` de
+`chatbot.py` — aucune logique métier dupliquée entre les deux interfaces.
+
+```bash
+streamlit run streamlit_app.py
+```
+
+**Décisions de conception :**
+- **Pas d'historique de conversation persistant** (`st.session_state`) —
+  cohérent avec `ask()`, qui traite déjà chaque question indépendamment
+  (8.1). Conséquence assumée : Streamlit relance tout le script à chaque
+  question, donc l'échange précédent disparaît visuellement de l'écran à
+  chaque nouvelle question, rien n'étant stocké entre deux exécutions.
+- **`load_vectorstore()` non mise en cache côté Streamlit** (pas de
+  `st.cache_resource`) — chaque question relit l'index Faiss depuis le
+  disque, exactement comme le fait déjà `chat_cli.py`. Choix de cohérence
+  entre les deux interfaces plutôt qu'une optimisation isolée d'un seul
+  côté (décision du 23/07/2026).
+- **Erreurs API capturées proprement** (`st.error`) plutôt qu'un traceback
+  brut affiché dans la page — utile en démo live face à Jérémy si l'appel à
+  Mistral échoue (quota, réseau).
+- **Sources affichées dans un expander**, avec le même badge sur les
+  résultats hybrides (🔎) que dans `chat_cli.py`, plus le décompte de tokens
+  consommés (`resultat["usage"]`) en légende discrète.
+
 ### 8.10 Limitations connues et pistes pour la version finale
 
 - **Reranking LLM envisagé, écarté pour ce POC.** `mistralai-search-toolkit`
