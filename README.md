@@ -294,3 +294,144 @@ python -m pytest tests/ -v
 `test_preprocess.py`, 4/4 sur `test_data_quality.py` (12 643 chunks, aucune
 violation de date ou de périmètre détectée).
 
+## 7. Indexation Faiss (étape 3)
+
+```bash
+python -m src.build_faiss_index
+python -m pytest tests/test_faiss_index.py -v
+```
+
+**Construction (`src/build_faiss_index.py`)** : charge `chunks.json` +
+`embeddings.npy` (déjà calculés par `vectorize.py`, aucun nouvel appel API
+ici — étape gratuite et locale, relançable à volonté), construit l'index via
+LangChain (`FAISS.from_embeddings`), vérifie que tous les événements sont
+représentés, puis sauvegarde dans `vector_store/`.
+
+**Décisions de conception :**
+
+- **Index Flat (recherche exacte), pas IVF/HNSW.** À l'échelle de ce POC
+  (~12 600 vecteurs), une recherche exacte reste de l'ordre de quelques
+  millisecondes à quelques dizaines de ms (mesuré : voir résultats
+  ci-dessous) — les index approximatifs (IVF, HNSW) deviennent intéressants
+  à partir de dizaines/centaines de milliers de vecteurs, pas à ce volume.
+  Les ajouter maintenant introduirait des paramètres à régler (nombre de
+  clusters, taille de graphe...) sans bénéfice mesurable, avec une perte de
+  précision pour rien. **Recommandation pour la version finale** si le
+  volume d'événements grossit significativement (ex: extension à toute la
+  région ou au national) : revisiter ce choix.
+- **Distance : `MAX_INNER_PRODUCT`** (pas `COSINE`, changé le 19/07/2026 — voir
+  7.1). Pour des vecteurs normalisés (norme 1, garanti par Mistral), le
+  produit scalaire brut renvoyé par Faiss **est** exactement la similarité
+  cosinus, sans aucune transformation intermédiaire — donc aucune formule
+  approximative à appliquer, contrairement à `COSINE`.
+
+### 7.1 Deux bugs Faiss découverts en creusant des scores incohérents (18-19/07/2026)
+
+En creusant un cas où un événement pertinent (score cosinus réel 0.6970,
+vérifié par calcul brute-force indépendant) n'apparaissait pas dans le top
+100 alors que des résultats moins pertinents (0.67) y figuraient, deux bugs
+distincts ont été trouvés et corrigés :
+
+1. **`FAISS.save_local()`/`load_local()` ne persistent pas `distance_strategy`
+   ni `normalize_L2`.** Seuls l'index Faiss brut et le magasin de documents
+   sont sauvegardés — à chaque rechargement, ces réglages retombaient
+   silencieusement sur leur valeur par défaut (`EUCLIDEAN_DISTANCE`). Ça ne
+   faussait pas la **sélection** des résultats (la recherche brute par
+   distance reste équivalente au classement cosinus pour des vecteurs
+   normalisés), mais faussait le **score affiché** pour chacun (mauvaise
+   formule de conversion). Fix : repréciser ces paramètres explicitement à
+   chaque appel de `FAISS.load_local()` (voir `load_vectorstore()` dans
+   `build_faiss_index.py`).
+2. **La fonction de conversion "score de pertinence" de LangChain est
+   approximative pour `COSINE`, et carrément inversée pour
+   `MAX_INNER_PRODUCT`** (`1.0 - distance` au lieu de `1.0 - distance/2` pour
+   `COSINE` ; testé empiriquement pour `MAX_INNER_PRODUCT` : un cosinus de
+   1.0, la meilleure correspondance possible, donnait un score de 0.0).
+   Fix : passer de `COSINE` à `MAX_INNER_PRODUCT` (index `IndexFlatIP`) et
+   utiliser `similarity_search_with_score()` (score **brut**, jamais
+   transformé) plutôt que `similarity_search_with_relevance_scores()`.
+
+**Aucun de ces deux bugs n'a jamais affecté quels événements étaient
+sélectionnés/recommandés** — uniquement le nombre affiché à côté. Vérifié à
+chaque étape par calcul indépendant (produit scalaire numpy manuel comparé
+au résultat Faiss).
+
+**Avertissements rencontrés (sans impact, vérifiés)** :
+- *"Normalizing L2 is not applicable for metric type: DistanceStrategy.COSINE"*
+  — faux avertissement de `langchain-community` : la normalisation est bel
+  et bien appliquée (vérifié en lisant le code source, et confirmé
+  empiriquement par un score de 1.0000 exact sur un test avec un vecteur
+  identique).
+- Dépréciation de `langchain-community` (déjà notée à l'étape 1).
+
+**Résultat (17/07/2026)**
+
+| | |
+|---|---|
+| Vecteurs indexés | 12 643 |
+| Événements représentés | 10 719 / 10 719 (complétude vérifiée) |
+| Temps de recherche Faiss (mesuré, hors appel réseau Mistral) | 16,33 ms |
+
+**Tests (`tests/test_faiss_index.py`)** — 6/6 passent :
+
+| Test | Vérifie |
+|---|---|
+| `test_index_contient_autant_de_vecteurs_que_de_chunks` | Complétude (nombre de vecteurs = nombre de chunks) |
+| `test_tous_les_evenements_sont_representes` | Aucun événement absent de l'index |
+| `test_recherche_retrouve_le_bon_evenement` | Chercher le titre exact d'un événement le retrouve dans le top 5 |
+| `test_recherche_par_mots_cles_retrouve_des_evenements_pertinents` | Une recherche thématique (mots-clés seuls, pas le titre) retrouve un résultat pertinent |
+| `test_filtrage_par_date_exacte_fonctionne` | Le filtrage sur métadonnées (`filter=`) retrouve fiablement tous les événements d'un jour donné |
+| `test_recherche_faiss_reste_rapide` | Recherche Faiss < 200 ms, mesurée isolément du temps réseau |
+
+Contrairement aux autres tests du projet, ceux-ci font de vrais appels à
+l'API Mistral (embedding de la requête de recherche) — un choix volontaire
+pour valider le comportement réel plutôt que simulé, au prix d'un tout petit
+coût API par lancement.
+
+### 7.2 Limitations connues et observations (découvertes en testant sur les vraies données)
+
+- **La recherche sémantique seule ne fiabilise pas les critères précis
+  (dates, prix, identifiants).** Chercher une date exacte par similarité
+  ramène des dates "du même genre" (même mois/saison), pas forcément la
+  bonne — un embedding ne fait pas d'arithmétique sur les nombres. Solution
+  retenue : filtrage strict sur métadonnées (`filter=`) en complément de la
+  recherche vectorielle, pas à la place — généralisée aux mots-clés à
+  l'étape 4 (voir section 8.4).
+- **Piège LangChain sur `filter=`** : par défaut, le filtre ne s'applique
+  qu'aux 20 voisins sémantiques les plus proches de la requête (`fetch_k=20`),
+  pas à l'index entier — `k` ne contrôle que le nombre de résultats *gardés*
+  après filtrage, pas le nombre de candidats *examinés* avant. Nécessite de
+  fixer `fetch_k` explicitement au nombre total de chunks pour un filtrage
+  fiable sur l'ensemble des données.
+- **Les scores de similarité ne sont pas proportionnels à la quantité de
+  texte qui correspond.** Chercher le titre exact d'un événement donne un
+  score cosinus \~0,77 (pas 1,0, puisque le chunk indexé contient bien plus
+  que le titre seul), et une recherche par mots-clés courts peut donner un
+  score très proche — un texte court et thématiquement pur peut aligner
+  aussi bien qu'un texte long. Pas un signe de dysfonctionnement.
+- **La similarité sémantique seule ne suffit pas à bien classer des
+  résultats déjà "dans le même thème général".** Cas vérifié : sur une
+  recherche de concert de musique metal, les vrais concerts metal (score
+  cosinus réel jusqu'à 0.70) étaient classés derrière des concerts d'autres
+  genres (jusqu'à 0.77) — l'un d'eux (ASHEN) au rang réel 3106 sur 12 643,
+  totalement hors de portée d'un `top_k` raisonnable. **Recommandation
+  suivie dès l'étape 4** : recherche hybride (filtre exact en complément),
+  voir section 8.4.
+- **Doublons apparents dans les données source.** Un même événement ("Forum
+  Mystère", 27/11/2025) apparaît sous 4 `uid` OpenAgenda différents,
+  correspondant à 4 créneaux horaires (13h, 14h, 14h30, 15h30) publiés comme
+  des événements séparés plutôt que regroupés dans un seul `timings` — un
+  choix de l'organisateur/agenda source, pas un bug du pipeline. Notre
+  déduplication (sur `uid` exact) ne peut pas détecter ce cas.
+  **Recommandation pour la version finale** : dédupliquer aussi sur
+  titre+adresse+jour si ce cas s'avère fréquent, et/ou regrouper ces
+  créneaux à l'affichage côté chatbot plutôt qu'à l'indexation.
+- **Incohérence de fuseau horaire entre deux champs de l'API.**
+  `firstdate_begin` (→ notre `date_start`) est fourni en UTC, alors que
+  `timings.begin/end` est fourni en heure locale française (`+01:00` hiver /
+  `+02:00` été) — vérifié sur des cas réels. Impact négligeable pour ce
+  projet (rare qu'un événement culturel commence pile autour de minuit), mais
+  à garder en tête : le jour calendaire calculé depuis `date_start` (UTC)
+  peut différer du jour "vécu" en France pour un événement démarrant très tôt
+  le matin ou très tard le soir heure de Paris.
+
