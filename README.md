@@ -440,7 +440,8 @@ coût API par lancement.
 ```bash
 python -m src.chat_cli
 streamlit run streamlit_app.py
-python -m pytest tests/test_chatbot_scenarios.py -v -s
+python -m pytest tests/test_environnement_chatbot.py -v -s
+python -m evaluation.evaluate_chatbot
 ```
 
 ### 8.1 Architecture — deux chaînes LCEL
@@ -521,7 +522,8 @@ version.
    dans la zone intermédiaire.
 2. **Détection dans la question** : mots-clés connus (comparaison par
    frontière de mot) + dates au format "JJ mois \[AAAA\]" en français (sans
-   année, suppose la prochaine occurrence à venir).
+   année, suppose la prochaine occurrence à venir). **Étendu le 31/07/2026**
+   à de vraies PÉRIODES, pas seulement une date exacte — voir 9.3.
 3. **Normalisation casse + accents** (`unicodedata`, NFKD) appliquée à
    3 endroits (vocabulaire, question, **et** mots-clés bruts de chaque
    événement au moment du filtre — ce dernier point corrigeait un bug réel :
@@ -557,6 +559,12 @@ version.
    d'aquitaine") — une question du type "qu'est-ce qui se passe au Pin
    Galant ?" est une demande légitime, les exclure casserait ce cas d'usage
    (même raisonnement que pour les événements passés, voir 8.7).
+   **Étendue le 31/07/2026** de 11 à 37 entrées, suite à un audit
+   systématique déclenché par l'évaluation (voir 9.3) : le filtre de
+   fréquence et la liste manuelle traitent chaque CHAÎNE EXACTE
+   séparément, donc une variante singulier/pluriel d'un mot déjà exclu
+   (ex. "concert" exclu, "concerts" oublié) peut passer inaperçue —
+   confirmé sur 424 faux positifs réels avant correctif.
 
 **Résultat vérifié** (19/07/2026, question "Un concert de musique métal à
 Bordeaux ?") : les 5 vrais concerts metal de la base (ASHEN, SOIRÉE METAL,
@@ -574,14 +582,16 @@ texte seul et perdu cette métadonnée). Affiché après chaque échange dans
 `chat_cli.py` : utile vu la limite serrée du compte (25 000 tokens/min sur
 `mistral-medium-latest`).
 
-### 8.6 Tests (`tests/test_chatbot_scenarios.py`)
+### 8.6 Tests d'environnement (`tests/test_environnement_chatbot.py`)
 
 Contrairement aux tests précédents, la justesse d'une réponse en langage
-naturel n'est pas vérifiable par un simple `assert` — pas de jeu de
-questions/réponses annoté pour comparer (ce sera l'objet de l'étape 5). Ce
-fichier vérifie donc ce qui EST automatisable (réponse non vide, sources
-trouvées, garde-fou qui se déclenche bien sur une question hors-sujet) et
-affiche le reste (`-s`) pour relecture humaine.
+naturel n'est pas vérifiable par un simple `assert`. Ce fichier (renommé et
+réduit le 31/07/2026, voir 9.1) ne couvre plus que la vérification
+d'environnement (index Faiss présent, clé API configurée) — un garde-fou
+rapide en tête de suite de tests, pour un échec clair ici plutôt qu'une
+erreur confuse plus loin dans la chaîne. La mesure de la qualité des
+réponses (le jeu de questions/réponses annoté demandé par le mail du
+manager, étape 5) fait maintenant l'objet de sa propre section, voir 9.
 
 ### 8.7 Distinction événements passés / à venir
 
@@ -615,6 +625,25 @@ a mélangé un événement passé et un événement à venir sous un même intit
 Corrigé en exigeant des intitulés explicitement distincts ("le dernier en
 date était..." / "le prochain est..."), jamais regroupés sous un même
 en-tête ou une même liste.
+
+**Revu en profondeur le 31/07/2026, suite à l'évaluation (voir 9.3)** : la
+distinction passé/à venir reposait entièrement sur le raisonnement de
+Mistral à la génération — fiable sur des événements ponctuels (une seule
+date), mais pas sur des événements à PLAGE (cours récurrents, expositions
+sur plusieurs semaines) : des cours de danse terminés depuis juin étaient
+présentés comme "encore accessibles", car seule `date_start` (déjà
+largement passée, mais pas la date qui compte pour juger si un événement à
+plage est encore valide) était exposée dans le contexte structuré — la
+date de fin réelle n'existait que noyée dans le texte libre de la
+description. Fix : `_statut_temporel()` calcule désormais ce statut
+(`[À VENIR]` / `[EN COURS]` / `[TERMINÉ]`) **en Python**, à partir de
+`date_start`/`date_end` comparées à `date.today()`, et l'injecte comme
+label explicite dans `_formater_contexte()` — `date_end` est aussi affichée
+en clair quand elle diffère de `date_start`. `SYSTEM_PROMPT` instruit
+maintenant Mistral à se fier à cette annotation plutôt qu'à recalculer
+lui-même le statut à partir des dates brutes — même principe que le
+garde-fou anti-hallucination (8.3) : ne pas faire confiance au LLM pour ce
+que le code peut calculer de façon fiable.
 
 ### 8.8 Fusion score sémantique + score lexical (TF-IDF)
 
@@ -741,10 +770,13 @@ streamlit run streamlit_app.py
   critères précis (prix exact, tranche d'âge, accessibilité PMR...) restent
   soumis aux limites de la recherche sémantique pure si un jour ils
   s'avèrent nécessaires.
-- **Détection de date limitée au format explicite "JJ mois \[AAAA\]".** Les
-  dates relatives ("ce week-end", "demain", "en novembre" sans jour précis)
-  ne sont pas gérées — hors scope pour ce POC (cf. discussion), à couvrir
-  si le besoin se confirme à l'usage.
+- **Détection de date limitée au format explicite "JJ mois \[AAAA\]", à
+  l'origine.** Étendu le 31/07/2026 aux plages explicites ("entre le 1er
+  et le 15 octobre") et aux expressions relatives courantes ("aujourd'hui",
+  "ce week-end", "cette semaine", "dans le mois qui vient"...) — voir 9.3.
+  Reste limité aux expressions couvertes explicitement dans
+  `EXPRESSIONS_RELATIVES` (chatbot.py) ; une expression non reconnue
+  retombe sur la recherche sémantique pure, sans filtre de date.
 - **Vocabulaire de mots-clés (et sa liste d'exclusion, 8.4) figés à l'import
   du module.** Si `vectorize.py` est relancé (nouvelles données) sans
   redémarrer le chatbot, le vocabulaire de déclenchement de la recherche
@@ -764,7 +796,120 @@ streamlit run streamlit_app.py
   le même fichier). Cause précise non confirmée à ce stade — diagnostic
   proposé (`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
 
-## 9. Structure du projet (mise en place, sera complétée aux étapes suivantes)
+## 9. Évaluation du chatbot (étape 5)
+
+### 9.1 Contexte et distinction avec 8.6
+
+Consigne du mail du manager : *"Pour évaluer le système, nous aurons besoin
+de créer un jeu de données test annoté de questions / réponses. Ce jeu test
+sera utilisé pour mesurer la qualité des réponses par rapport aux réponses
+annotées."* — un objet différent de 8.6 (qui vérifie que le chatbot ne
+plante pas, pas la qualité de ses réponses). `tests/test_chatbot_scenarios.py`
+a donc été réduit à `tests/test_environnement_chatbot.py` (8.6), et cette
+partie qualité vit dans un nouveau dossier séparé, `evaluation/`, hors de
+`tests/` — pas un test pytest, une mesure à interpréter, pas un pass/fail.
+
+```
+evaluation/
+├── __init__.py
+├── QA_annotees.json        # jeu de 13 questions annotées
+├── evaluate_chatbot.py     # script d'évaluation
+└── rapports/                # rapports Markdown horodatés (non versionné)
+```
+
+### 9.2 Jeu de questions annotées (`evaluation/QA_annotees.json`)
+
+13 questions, trois types (champ `type`), trois façons de les évaluer :
+
+- **`generatif`** (9 questions) — une `reponse_reference` rédigée à la main
+  à partir des vrais événements de la base. Pas de bonne réponse unique en
+  langage naturel : mesurée par similarité cosinus (embeddings `mistral-embed`
+  de la référence et de la réponse générée) **et** par un LLM-juge
+  (`mistral-medium-latest`, température 0), qui évalue si la réponse
+  générée est plausible et honnête plutôt que si elle cite exactement les
+  mêmes événements que la référence (prompt revu le 31/07/2026 — la
+  première version, trop stricte sur la correspondance mot à mot,
+  pénalisait à tort des réponses différentes de la référence mais tout
+  aussi valides, cf. 9.3).
+- **`hors_sujet`** (2 questions) — comparaison stricte à
+  `config.RAG_NO_RESULTS_MESSAGE` et vérification que `usage is None`
+  (confirme qu'aucun appel de génération n'a eu lieu). Le résultat est
+  rapporté, jamais présupposé : le seuil de pertinence (8.3) reste un
+  heuristique imparfait, un cas réel de question de trivia le contournant
+  a été observé pendant la conception du jeu de test.
+- **`vague`** (1 question) — aucune mesure automatique pertinente (pas de
+  bonne réponse objective), affichée pour relecture humaine.
+
+Quelques cas volontairement pièges dans le jeu : une question dont la seule
+réponse honnête est "rien trouvé" (Q11, patinage artistique — vérifié
+absent des 10 719 événements), une question où aucun résultat ne coche
+toutes les cases à la fois (Q12, "concert gratuit... famille" — un seul
+événement approchant, ni étiqueté concert ni explicitement familial), et
+une question dont les seuls résultats disponibles sont des événements déjà
+terminés (Q4, cours de danse — voir 8.7).
+
+**Limite assumée** : les questions à mention temporelle relative (Q2, Q3,
+Q9, Q12) ont leurs réponses de référence ancrées à une date précise
+(`date_ancrage`), documentée dans chaque entrée concernée. Elles se
+périment si le script est relancé loin de cette date — à régénérer au
+besoin plutôt qu'à interpréter littéralement un score qui aurait baissé
+pour cette seule raison.
+
+### 9.3 Script d'évaluation (`evaluation/evaluate_chatbot.py`)
+
+```bash
+python -m evaluation.evaluate_chatbot
+python -m evaluation.evaluate_chatbot --questions chemin/vers/autre_fichier.json
+```
+
+Pour chaque question : appelle `ask()`, applique la vérification adaptée à
+son `type` (9.2), puis affiche un résumé en console et sauvegarde un
+rapport Markdown détaillé et horodaté (`evaluation/rapports/`) — y compris,
+pour chaque source utilisée, son statut temporel (`[À VENIR]`/`[EN COURS]`/
+`[TERMINÉ]`, voir 8.7) et sa date de fin quand elle diffère de la date de
+début : indispensable pour distinguer un problème de récupération (les bons
+événements n'ont jamais été trouvés) d'un problème de génération (ils
+étaient là, mais mal exploités).
+
+**Bugs réels trouvés et corrigés grâce à ce script** (31/07/2026) :
+
+1. **Récupération aveugle aux expressions temporelles relatives/plages.**
+   La recherche hybride ne détectait qu'une date exacte littérale ("16
+   novembre") — "aujourd'hui", "dans le mois qui vient", "entre le 1er et
+   le 15 octobre" ne déclenchaient aucun filtre, donc aucune garantie que
+   les événements de la bonne période soient seulement candidats. Fix :
+   `_detecter_periode_dans_question()` (chatbot.py) généralise la détection
+   à trois niveaux (plage explicite avec élision du mois > expression
+   relative connue via `EXPRESSIONS_RELATIVES` > date unique, cas
+   particulier d'une plage `(date, date)`), et `_chevauche_periode()`
+   filtre par CHEVAUCHEMENT d'intervalles (`date_start`/`date_end` de
+   l'événement contre la période demandée), pas seulement par `date_start`
+   dans la période — sans quoi un événement déjà en cours mais commencé
+   avant la période demandée (une exposition qui dure plusieurs mois,
+   par exemple) ne remonterait jamais.
+2. **Distinction passé/à venir peu fiable sur les événements à plage** —
+   voir 8.7 (`_statut_temporel()`).
+3. **Vocabulaire hybride incomplet sur les variantes singulier/pluriel** —
+   voir 8.4 (`RAG_MOTS_CLES_EXCLUS`, 11 → 37 entrées).
+
+### 9.4 Limites connues de cette évaluation
+
+- **LLM-juge encore imparfait sur les questions à réponses multiples
+  valides** (ex. "quels événements en famille ?") : même avec le prompt
+  révisé (9.2), il reste plus sévère qu'un humain sur une réponse
+  correcte mais qui cite des événements différents de la référence.
+  Observé directement (Thomas, 31/07/2026) : les scores restent bas sur
+  plusieurs questions dont les réponses, relues à l'œil, sont cohérentes.
+- **Complétude de la récupération sur un genre non auto-décrit** (Q1,
+  ULTRA VOMIT) : cet événement ne mentionne "metal" ni dans son titre ni
+  dans ses mots-clés — ni la recherche hybride ni le score sémantique ne
+  peuvent le retrouver à partir de la seule question "un concert de metal
+  à Bordeaux ?". Non résolu, laissé de côté (priorité jugée faible).
+- **13 questions, pas un échantillon exhaustif** des usages possibles du
+  chatbot — un jeu de test plus large serait nécessaire pour une mesure de
+  qualité plus représentative en dehors du cadre de ce POC.
+
+## 10. Structure du projet (mise en place, sera complétée aux étapes suivantes)
 
 ```
 puls-events-rag/
@@ -786,7 +931,12 @@ puls-events-rag/
 │   ├── test_preprocess.py       # tests unitaires purs (logique de filtre)
 │   ├── test_data_quality.py     # validation des vraies données indexées
 │   ├── test_faiss_index.py      # complétude, pertinence, vitesse de l'index Faiss
-│   └── test_chatbot_scenarios.py  # scénarios d'interaction (pertinent/hors-sujet/vague)
+│   └── test_environnement_chatbot.py  # vérification d'environnement (8.6)
+├── evaluation/
+│   ├── __init__.py
+│   ├── QA_annotees.json        # jeu de questions/réponses annotées (9.2)
+│   ├── evaluate_chatbot.py     # script d'évaluation (9.3)
+│   └── rapports/                # rapports Markdown horodatés (non versionné)
 ├── notebooks/             # explorations ponctuelles
 ├── reports/               # rapport technique, présentation
 ├── requirements.in         # dépendances directes (lisible)
@@ -797,13 +947,13 @@ puls-events-rag/
 └── README.md
 ```
 
-## 10. Statut
+## 11. Statut
 
 - [x] Étape 1 — Environnement de développement (venv, dépendances, vérification)
 - [x] Étape 2 — Extraction, pré-traitement, vectorisation Mistral et tests unitaires : 10 715 événements → 12 643 chunks vectorisés (Bordeaux Métropole, < 1 an) — détail en section 6
 - [x] Étape 3 — Indexation Faiss + vérifications d'efficacité/rapidité : 12 643 vecteurs indexés, recherche en 16,33 ms — détail en section 7
 - [x] Étape 4 — Pipeline RAG (retrieval hybride + génération Mistral, chaînes LCEL) — détail en section 8
-- [ ] Étape 5 — Jeu de test annoté (questions/réponses)
+- [x] Étape 5 — Jeu de test annoté (questions/réponses) : 13 questions, similarité cosinus + LLM-juge + garde-fou, plusieurs bugs de récupération/temporalité trouvés et corrigés — détail en section 9
 - [ ] Étape 6 — Rapport technique
 - [ ] Étape 7 — Présentation PowerPoint
 - [ ] Étape 8 — Démo live

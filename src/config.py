@@ -203,11 +203,62 @@ RAG_KEYWORD_MAX_FREQUENCY = 0.01
 # se passe au Pin Galant ?" est une demande légitime, les exclure casserait
 # ce cas d'usage (même raisonnement que pour les événements passés, cf.
 # discussion du 27/07/2026).
+#
+# Lot ajouté le 31/07/2026 suite à un diagnostic systématique (regroupement
+# des mots-clés par radical singulier/pluriel) : RAG_KEYWORD_MAX_FREQUENCY
+# filtre par CHAÎNE EXACTE, pas par concept -- une variante (souvent le
+# pluriel) d'un mot déjà exclu au singulier peut passer sous le seuil,
+# comptée séparément (la normalisation _normaliser gère la casse et les
+# accents, pas les variantes singulier/pluriel). Découvert via 424 faux
+# positifs sur "Des concerts de musique dans le mois qui vient ?" (mot
+# fautif : "concerts"), puis généralisé en comparant TOUT le vocabulaire par
+# radical naïf. Deux familles parmi les résultats :
+#   - mots de FORMAT (evenement, exposition, conference, rencontre, visite,
+#     sortie, spectacle) -- même logique que cours/atelier/soirée plus haut ;
+#   - mots de GENRE/PUBLIC trop larges (art, culture, musique, film,
+#     histoire, famille, jeunesse, senior) -- même logique que
+#     musique/concert/bordeaux, déjà exclus par le seuil de fréquence lui-même.
+# Volontairement PAS ajoutés malgré le même diagnostic : "balade(s)" et
+# "jardin(s)" -- plus proches d'un lieu/thème précis (cf. "Pin Galant" plus
+# haut) que d'un format générique ; à revoir seulement si un faux positif
+# concret est observé à l'usage plutôt que par principe.
 RAG_MOTS_CLES_EXCLUS = {
     "cours", "soiree", "soirees", "concours", "ateliers",
-    "seance speciale", "reunion d'information", "activite",
-    "animations", "quartier",
+    "seance speciale", "reunion d'information", "activite", "activites",
+    "animations", "quartier", "concerts",
+    "evenement", "evenements", "expositions", "conferences",
+    "rencontres", "visites", "sorties", "spectacles",
+    "arts", "artes", "cultures", "musiques", "films", "histoires",
+    "familles", "jeunesse", "jeunes", "jeune", "jeunesses", "jeune publics",
+    "senior", "recrutements", "week-end", "faire", "en famille",
 }
+# "activites" (pluriel) ajouté le 31/07/2026 : "activite" (singulier) était
+# déjà exclue manuellement depuis la découverte de "cours", mais son
+# pluriel ne l'était pas -- angle mort du lot précédent, qui ne comparait
+# que face au SEUIL AUTOMATIQUE (RAG_KEYWORD_MAX_FREQUENCY), jamais face à
+# la liste d'exclusion manuelle elle-même. Explique Q5 et Q6 du jeu de test
+# (toutes deux contiennent "activités").
+#
+# Repéré à la même occasion, et volontairement PAS ajouté : le regroupement
+# naïf par radical rapproche à tort "cours" (classe) et "course"/"courses"
+# (course à pied) -- mots sans rapport, malgré un radical commun une fois
+# le "s"/"e" final retiré. Un futur audit du même type devra vérifier
+# chaque paire à la main plutôt que faire confiance au seul radical.
+#
+# "week-end" ajouté le 31/07/2026, confirmé via
+# _detecter_mots_cles_dans_question() sur Q12 : même famille que "cours" --
+# un marqueur de MOMENT, pas de contenu, n'importe quel type d'événement
+# peut avoir lieu "le week-end" (5 occurrences).
+#
+# "concert gratuit" (tag composé, matché sur la même question) envisagé
+# puis volontairement écarté, sur décision de Thomas : seulement 2
+# occurrences, impact jugé trop marginal pour justifier une entrée dédiée.
+#
+# "faire" et "en famille" ajoutés le 31/07/2026, confirmés via
+# _detecter_mots_cles_dans_question() sur Q5 : "faire" (16 occurrences) est
+# un verbe, aucun contenu informatif en soi ; "en famille" (5 occurrences)
+# est une variante phrasée du même marqueur de public que "famille"/
+# "familles", déjà exclus.
 
 # En dessous de ce score de similarité cosinus (exact, calculé via le score
 # BRUT d'un index MAX_INNER_PRODUCT sur des vecteurs normalisés — voir

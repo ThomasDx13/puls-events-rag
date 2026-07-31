@@ -1,0 +1,93 @@
+[
+    {
+        "id": "Q1",
+        "type": "generatif",
+        "question": "Un concert de métal à Bordeaux ?",
+        "reponse_reference": "Il y a un concert de métal à Bordeaux : ULTRA VOMIT, le 2 octobre 2026 à la Salle des Fêtes Bordeaux Grand Parc (39 cours de Luze). Tarif plein 33€, tarif réduit 30€ (étudiant, demandeur d'emploi, PMR et accompagnant), placement libre debout, ouverture des portes à 19h."
+    },
+    {
+        "id": "Q2",
+        "type": "generatif",
+        "question": "Des concerts de musique dans le mois qui vient ?",
+        "date_ancrage": "2026-07-30",
+        "notes": "Question ancrée sur les 30 jours suivant la date du jour (30/07 au 29/08/2026). À régénérer si le script est relancé loin de cette date.",
+        "reponse_reference": "Plusieurs concerts sont prévus dans le mois à venir à Bordeaux : un concert classique (Ravel, Debussy, Bach, Vivaldi...) à l'Église Notre-Dame le 8 août (25-30€), \"Les Inédits de l'été\" avec ALA.NI à Pessac le 11 août, un ciné-concert \"Dans les bois\" le 12 août (gratuit), et \"Pagaille débarque à Bordeaux\" (reprises The Cure et Charlotte De Witte) place des Quinconces le 28 août (à partir de 45€)."
+    },
+    {
+        "id": "Q3",
+        "type": "generatif",
+        "question": "Des évènements aujourd'hui autour de Bordeaux ?",
+        "date_ancrage": "2026-07-31",
+        "notes": "Question ancrée sur la date du jour exacte. La plus fragile des trois questions datées : à régénérer à chaque nouvelle exécution du script si on veut une comparaison stricte.",
+        "reponse_reference": "Il y a plusieurs événements aujourd'hui autour de Bordeaux Métropole, par exemple : Don du sang à Saint-Médard-en-Jalles (sur inscription), un apéro-spectacle \"La Motivation\" par la Cie LDQV à Saint-Louis-de-Montferrand (entrée libre), et Quartiers Sports au Parc Monséjour à Bordeaux. Plusieurs événements en cours ce jour-là correspondent aussi, comme la visite \"Bordeaux dans la Seconde Guerre mondiale\" (dernier jour) ou le jeu de piste \"Le voleur du Grand Théâtre\" au Grand Théâtre (jusqu'au 28 août)."
+    },
+    {
+        "id": "Q4",
+        "type": "generatif",
+        "question": "Où puis-je prendre des cours de danse ?",
+        "notes": "Cas piège : les seuls cours de danse présents dans les données (swing, tango...) datent de la rentrée 2025 (sept. 2025 - janv. 2026), donc déjà passés. Aucun cours à venir n'est référencé. La bonne réponse doit le dire clairement, sans présenter ces annonces de rentrée passée comme si elles étaient toujours d'actualité. Teste le fix temporel (date_du_jour) -- le mot-clé \"cours\" lui-même n'est plus un facteur de risque depuis son ajout à RAG_MOTS_CLES_EXCLUS.",
+        "reponse_reference": "Je ne trouve pas de cours de danse à venir dans les événements actuellement référencés. Les seules annonces de cours de danse présentes (swing, tango...) concernent la rentrée de septembre 2025, une période déjà passée."
+    },
+    {
+        "id": "Q5",
+        "type": "generatif",
+        "question": "Peux-tu me recommander des activités à faire en famille ?",
+        "reponse_reference": "Plusieurs activités familiales à venir : une Soirée jeux à Saint-Médard-en-Jalles (1er août), \"Artistes en herbe : Portraits de nature\" au Taillan-Médoc (2 août), Ciné vacances au Bouscat (4 et 25 août), et une balade nature \"Au fil de l'eau\" autour du lac de Bordeaux (30 août)."
+    },
+    {
+        "id": "Q6",
+        "type": "generatif",
+        "question": "Des recommandations d'activités gratuites dans Bordeaux ?",
+        "reponse_reference": "Plusieurs activités gratuites à Bordeaux : Piscine Party à la piscine Georges Tissot (1er août, entrée libre et gratuite), Quartiers Sports à plusieurs endroits de la ville (entrée libre), \"Les Inédits de l'Été\" avec l'Ensemble Chakâm (5 août, gratuit sans réservation), et le Ciné-Concert \"Dans les bois\" (12 août, gratuit sans réservation)."
+    },
+    {
+        "id": "Q7",
+        "type": "generatif",
+        "question": "Il y a-t-il des évènements en rapport avec la science dans les alentours ?",
+        "reponse_reference": "Oui, deux exemples à Bordeaux : \"Art et Science\", une visite commentée au Musée des Beaux-Arts dans le cadre de la Fête de la Science (7 octobre), et une visite de l'Académie nationale des sciences, belles-lettres et arts de Bordeaux à l'Hôtel Calvet (19 septembre)."
+    },
+    {
+        "id": "Q8",
+        "type": "vague",
+        "question": "Que me recommandes-tu d'intéressant ?",
+        "notes": "Question totalement ouverte, sans critère objectif de bonne réponse : aucune reponse_reference fournie. Comme test_question_vague dans l'ancien script, à évaluer qualitativement à l'oeil (réponse non vide, cohérente, sourcée) plutôt que par comparaison automatique.",
+        "reponse_reference": null
+    },
+    {
+        "id": "Q9",
+        "type": "generatif",
+        "question": "Quels évènements auront lieu entre le 1er et le 15 octobre ?",
+        "date_ancrage": "2026-07-30",
+        "notes": "Date absolue (pas relative à 'aujourd'hui'), donc moins fragile que Q2/Q3 - mais suppose l'année 2026 la plus proche depuis la date d'ancrage. 135 événements sur la période : échantillon représentatif ci-dessous, pas une liste exhaustive.",
+        "reponse_reference": "Beaucoup d'événements sont prévus entre le 1er et le 15 octobre (rentrée culturelle), par exemple : le Festival Cinopsy's 2026 (2 octobre), le concert ULTRA VOMIT (2 octobre), \"Nadia et Lili Boulanger. Correspondances avec Jean Dupas\" (2 octobre), et \"Selam\" de la Cie Chara à Pessac (1er et 2 octobre)."
+    },
+    {
+        "id": "Q10",
+        "type": "hors_sujet",
+        "question": "Quelle est la capitale de la France ?",
+        "notes": "Comparé directement à config.RAG_NO_RESULTS_MESSAGE dans le script (pas de reponse_reference à dupliquer ici). Le déclenchement du garde-fou n'est pas garanti (cf. cas déjà observé où une question de trivia passait au-dessus du seuil) : le script doit rapporter le résultat, pas le présupposer.",
+        "reponse_reference": null
+    },
+    {
+        "id": "Q11",
+        "type": "generatif",
+        "question": "Un spectacle de patinage artistique à Bordeaux ?",
+        "notes": "Cas \"dans le périmètre, zéro résultat réel\" : vérifié, aucune occurrence de patinage artistique dans tout le dataset (10 719 événements). La bonne réponse doit dire honnêtement qu'aucun événement de ce type n'est trouvé, sans forcer une suggestion approximative.",
+        "reponse_reference": "Je ne trouve aucun spectacle de patinage artistique dans les événements actuellement référencés autour de Bordeaux."
+    },
+    {
+        "id": "Q12",
+        "type": "generatif",
+        "question": "Un concert gratuit ce week-end à Bordeaux pour toute la famille ?",
+        "date_ancrage": "2026-07-30",
+        "notes": "Cas piège (même famille de bug que 'Gautier Capuçon / Destination Paris' observé précédemment) : un seul événement à Bordeaux ce week-end-là (1-2 août 2026), 'Piscine Party' - gratuit, mêle théâtre/musique/danse/performance, ton plutôt familial - mais n'est ni étiqueté 'concert', ni explicitement 'famille'. La bonne réponse doit qualifier honnêtement l'écart plutôt que de le présenter comme une correspondance exacte.",
+        "reponse_reference": "Je ne trouve pas de concert à proprement parler ce week-end à Bordeaux, mais 'Piscine Party' (1er août, piscine Georges Tissot, entrée libre et gratuite) s'en approche : un spectacle participatif mêlant théâtre, musique et danse, au ton plutôt familial même si ce n'est pas explicitement indiqué."
+    },
+    {
+        "id": "Q13",
+        "type": "hors_sujet",
+        "question": "Comment faire un Kouign-amann ?",
+        "notes": "Hors-sujet d'un autre genre que Q10 (tâche pratique/recette plutôt que trivia culturelle). Comparé directement à config.RAG_NO_RESULTS_MESSAGE, même réserve que Q10 sur la fiabilité du garde-fou.",
+        "reponse_reference": null
+    }
+]

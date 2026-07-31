@@ -44,8 +44,8 @@ ARCHITECTURE DE CE FICHIER — deux chaînes distinctes
    prompt, "sources": liste de (Document, score, est_hybride)}. Ne touche
    jamais à Mistral pour la génération, uniquement pour transformer la
    question en vecteur (recherche Faiss) — sauf pour la recherche hybride
-   complémentaire (date/mot-clé exact), qui ne fait aucun appel API non plus
-   (juste un filtre sur les métadonnées déjà en mémoire).
+   complémentaire (période/mot-clé exact), qui ne fait aucun appel API non
+   plus (juste un filtre sur les métadonnées déjà en mémoire).
 
 2. `generation_chain` : {"question": ..., "context": ...} -> AIMessage complet
    (pas juste le texte — voir plus bas pourquoi). prompt | modèle.
@@ -66,7 +66,7 @@ import json
 import math
 import re
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -92,22 +92,25 @@ dis-le simplement et clairement. NE PROPOSE JAMAIS un événement du contexte co
 question sur la capitale de la France — ce n'est pas un lien pertinent).
 - Pour chaque événement recommandé, mentionne le titre, la date et le lieu. \
 Ajoute les conditions d'accès (prix, réservation) si elles sont fournies.
-- Nous sommes le {date_du_jour}. Compare toujours la date d'un événement à \
-aujourd'hui : un événement antérieur à cette date est déjà passé, ne le présente \
-jamais comme "à venir" ou "le prochain". Si la question porte explicitement sur un \
-événement passé, tu peux bien sûr t'appuyer sur des événements passés du contexte \
-pour répondre.
+- Nous sommes le {date_du_jour}. Chaque événement du contexte est annoté \
+[À VENIR], [EN COURS] ou [TERMINÉ] — c'est cette annotation qui fait foi, ne recalcule \
+JAMAIS toi-même le statut d'un événement à partir de ses dates brutes (l'annotation \
+tient déjà compte, le cas échéant, d'une date de fin distincte de la date de début — \
+un événement qui s'étend sur plusieurs semaines peut être [EN COURS] ou [TERMINÉ] \
+même si sa date de DÉBUT est déjà passée). Ne présente JAMAIS un événement annoté \
+[TERMINÉ] comme "à venir", "le prochain" ou "encore accessible". Si la question porte \
+explicitement sur un événement passé, tu peux bien sûr t'appuyer sur des événements \
+[TERMINÉ] du contexte pour répondre.
 - Si la question porte sur une période précise ("ce mois-ci", "cette semaine"...) et \
 qu'aucun événement du contexte ne correspond exactement à cette période, mais qu'un \
 événement du MÊME SUJET existe à une autre date dans le contexte, tu peux le mentionner \
-— à condition de le présenter sous un intitulé qui distingue clairement s'il s'agit d'un \
-événement PASSÉ ("le dernier en date était...") ou D'UN ÉVÉNEMENT À VENIR ("le prochain \
-est..."). Ne regroupe JAMAIS un événement passé et un événement à venir sous un même \
-intitulé ou une même liste (par exemple, n'écris jamais "le prochain concert est :" \
-suivi d'une liste qui inclut un événement déjà passé — même annoté "(déjà passé)"). \
-Reste strictement dans les événements du contexte (règle précédente) : ne mentionne un \
-événement à une autre date que s'il correspond réellement au sujet demandé, jamais sur \
-la seule base d'un mot en commun.
+— à condition de le présenter sous un intitulé qui reflète son annotation ([TERMINÉ] -> \
+"le dernier en date était...", [À VENIR] -> "le prochain est..."). Ne regroupe JAMAIS un \
+événement [TERMINÉ] et un événement [À VENIR] sous un même intitulé ou une même liste \
+(par exemple, n'écris jamais "le prochain concert est :" suivi d'une liste qui inclut un \
+événement [TERMINÉ] — même annoté "(déjà passé)"). Reste strictement dans les événements \
+du contexte (règle précédente) : ne mentionne un événement à une autre date que s'il \
+correspond réellement au sujet demandé, jamais sur la seule base d'un mot en commun.
 - Réponds en français, de façon naturelle et concise."""
 
 HUMAN_TEMPLATE = """Question : {question}
@@ -371,11 +374,13 @@ def _detecter_date_dans_question(question: str) -> str | None:
     """Détecte un motif 'JJ mois [AAAA]' en français (ex: '16 novembre',
     '16 novembre 2026') et le convertit en date ISO (AAAA-MM-JJ).
 
-    Volontairement limité à ce format explicite — les dates relatives
-    ('ce week-end', 'demain', 'en novembre' sans jour précis) ne sont pas
-    gérées : hors scope pour ce POC, à couvrir dans une version ultérieure
-    si le besoin se confirme à l'usage plutôt que d'anticiper tous les cas
-    possibles maintenant."""
+    Reste volontairement limitée à ce format explicite (une seule date
+    ponctuelle) — les plages et expressions relatives ('ce week-end',
+    'entre le X et le Y', 'dans le mois qui vient'...) sont gérées à part,
+    voir _detecter_periode_dans_question(), qui appelle cette fonction en
+    dernier recours. Split conservé : cette fonction reste utilisable seule
+    partout où une date ponctuelle exacte suffit (voir aussi
+    test_faiss_index.py)."""
     question_lower = question.lower()
     for mois_index, mois_nom in enumerate(MOIS_FR, start=1):
         match = re.search(rf"\b(\d{{1,2}})\s+{mois_nom}(?:\s+(\d{{4}}))?\b", question_lower)
@@ -387,6 +392,148 @@ def _detecter_date_dans_question(question: str) -> str | None:
             except ValueError:
                 return None
     return None
+
+
+# --------------------------------------------------------------------------
+# Détection de PÉRIODE (par opposition à une date ponctuelle unique, cf.
+# _detecter_date_dans_question ci-dessus) — ajoutée le 30/07/2026 suite à
+# l'évaluation sur QA_annotees.json : les questions à mention temporelle
+# relative ou en plage ("aujourd'hui", "ce mois-ci", "entre le 1er et le 15
+# octobre"...) ne remontaient JAMAIS le bon contexte, le retrieval n'ayant
+# aucune notion de calendrier en dehors d'une date exacte littérale. Même
+# philosophie que le reste du fichier : du Python déterministe, aucun appel
+# API, un filtre exact sur les métadonnées déjà en mémoire.
+# --------------------------------------------------------------------------
+
+MOIS_PATTERN = "|".join(MOIS_FR)
+
+
+def _detecter_plage_explicite(question: str) -> tuple[str, str] | None:
+    """Détecte 'entre le JJ [mois] et le JJ mois [AAAA]'. Le mois de la
+    première date est optionnel dans la regex : à l'oral/écrit, on élide
+    presque toujours celui de la première date quand les deux dates sont
+    dans le même mois ('entre le 1er et le 15 octobre', jamais 'entre le
+    1er octobre et le 15 octobre') — si absent, on emprunte celui de la
+    seconde date."""
+    q = question.lower()
+    match = re.search(
+        rf"entre\s+le\s+(\d{{1,2}})(?:er)?\s*(?:({MOIS_PATTERN}))?\s*"
+        rf"et\s+le\s+(\d{{1,2}})(?:er)?\s+({MOIS_PATTERN})(?:\s+(\d{{4}}))?",
+        q,
+    )
+    if not match:
+        return None
+
+    jour1, mois1_nom, jour2, mois2_nom, annee_str = match.groups()
+    jour1, jour2 = int(jour1), int(jour2)
+    mois1_nom = mois1_nom or mois2_nom
+    mois1_index = MOIS_FR.index(mois1_nom) + 1
+    mois2_index = MOIS_FR.index(mois2_nom) + 1
+
+    if annee_str:
+        annee1 = annee2 = int(annee_str)
+    else:
+        annee2 = _resoudre_annee_probable(mois2_index, jour2)
+        annee1 = annee2
+        if date(annee1, mois1_index, jour1) > date(annee2, mois2_index, jour2):
+            annee1 -= 1  # plage à cheval sur le nouvel an (ex: 20 déc. -> 5 jan.)
+
+    try:
+        return date(annee1, mois1_index, jour1).isoformat(), date(annee2, mois2_index, jour2).isoformat()
+    except ValueError:
+        return None
+
+
+def _plage_semaine_calendaire(aujourdhui: date) -> tuple[date, date]:
+    """'cette semaine' : aujourd'hui -> dimanche de la semaine calendaire
+    en cours (semaine lundi-dimanche)."""
+    jours_jusqua_dimanche = (6 - aujourdhui.weekday()) % 7
+    return aujourdhui, aujourdhui + timedelta(days=jours_jusqua_dimanche)
+
+
+def _plage_weekend_a_venir(aujourdhui: date) -> tuple[date, date]:
+    """'ce week-end'/'le week-end prochain' : samedi-dimanche à venir. Si on
+    est déjà samedi, le week-end en cours ; si on est dimanche, le SUIVANT
+    (celui en cours se termine aujourd'hui même, plus la peine de le
+    chercher)."""
+    jours_jusqua_samedi = (5 - aujourdhui.weekday()) % 7
+    samedi = aujourdhui + timedelta(days=jours_jusqua_samedi)
+    return samedi, samedi + timedelta(days=1)
+
+
+def _fin_mois_calendaire(aujourdhui: date) -> date:
+    """Dernier jour du mois calendaire en cours (pour 'ce mois-ci')."""
+    premier_jour_mois_suivant = date(
+        aujourdhui.year + (aujourdhui.month == 12),
+        (aujourdhui.month % 12) + 1, 1,
+    )
+    return premier_jour_mois_suivant - timedelta(days=1)
+
+
+# Expressions relatives reconnues -> fonction qui calcule (date_min, date_max)
+# à partir d'aujourd'hui. Comparaison faite sur la question normalisée
+# (_normaliser, casse + accents), comme le reste du fichier -- pas besoin de
+# variantes accentuées ici. Sémantiques décidées le 30/07/2026 :
+# - "dans le mois"/"dans les semaines" et "dans la semaine"/"dans les jours"
+#   sont volontairement DIFFÉRENTS : les premiers visent une fenêtre large
+#   et approximative (30 jours), les seconds une fenêtre courte et précise
+#   (6 jours) -- distinction fine mais réelle à l'usage en français.
+# - "cette semaine" (semaine calendaire, jusqu'à dimanche) est également
+#   DIFFÉRENT de "dans la semaine" (6 jours glissants) : la première ancre
+#   sur le calendrier, la seconde sur la date du jour.
+EXPRESSIONS_RELATIVES = {
+    "aujourd'hui":          lambda ajd: (ajd, ajd),
+    "dans la journee":      lambda ajd: (ajd, ajd),
+    "ce mois-ci":           lambda ajd: (ajd, _fin_mois_calendaire(ajd)),
+    "dans le mois":         lambda ajd: (ajd, ajd + timedelta(days=30)),
+    "dans les semaines":    lambda ajd: (ajd, ajd + timedelta(days=30)),
+    "cette semaine":        lambda ajd: _plage_semaine_calendaire(ajd),
+    "dans la semaine":      lambda ajd: (ajd, ajd + timedelta(days=6)),
+    "dans les jours":       lambda ajd: (ajd, ajd + timedelta(days=6)),
+    "ce weekend":           lambda ajd: _plage_weekend_a_venir(ajd),
+    "ce week-end":          lambda ajd: _plage_weekend_a_venir(ajd),
+    "le weekend prochain":  lambda ajd: _plage_weekend_a_venir(ajd),
+    "le week-end prochain": lambda ajd: _plage_weekend_a_venir(ajd),
+}
+
+
+def _detecter_periode_dans_question(question: str) -> tuple[str, str] | None:
+    """Détecte une période dans la question, renvoyée en (date_min, date_max)
+    ISO — trois niveaux, du plus spécifique au plus générique :
+      1. Plage explicite ('entre le 1er et le 15 octobre')
+      2. Expression relative connue (EXPRESSIONS_RELATIVES)
+      3. Date unique ('16 novembre', _detecter_date_dans_question) --
+         encapsulée dans le même format (date, date), pour que
+         _recherche_hybride_complementaire n'ait qu'UN SEUL filtre de
+         date à appliquer, quel que soit le cas de figure.
+    Renvoie None si rien n'est détecté (comportement identique à avant :
+    aucun filtre de date appliqué à la recherche hybride)."""
+    plage_explicite = _detecter_plage_explicite(question)
+    if plage_explicite:
+        return plage_explicite
+
+    question_normalisee = _normaliser(question)
+    for expression, calcule_plage in EXPRESSIONS_RELATIVES.items():
+        if re.search(rf"\b{re.escape(expression)}\b", question_normalisee):
+            debut, fin = calcule_plage(date.today())
+            return debut.isoformat(), fin.isoformat()
+
+    date_unique = _detecter_date_dans_question(question)
+    return (date_unique, date_unique) if date_unique else None
+
+
+def _chevauche_periode(metadata: dict, date_min: str, date_max: str) -> bool:
+    """Un événement est concerné par la période demandée si son intervalle
+    [date_start, date_end] CHEVAUCHE [date_min, date_max] -- pas seulement
+    si date_start tombe dedans. Sans cette distinction, un événement déjà en
+    cours (commencé avant la période mais toujours d'actualité pendant
+    celle-ci, ex: une exposition qui dure plusieurs mois) ne remonterait
+    jamais (cf. discussion du 30/07/2026)."""
+    debut = (metadata.get("date_start") or "")[:10]
+    if not debut:
+        return False
+    fin = (metadata.get("date_end") or debut)[:10]  # ponctuel si pas de date_end
+    return debut <= date_max and fin >= date_min
 
 
 def _recherche_hybride_complementaire(question: str, vectorstore) -> list[tuple[Document, float, bool]]:
@@ -404,6 +551,12 @@ def _recherche_hybride_complementaire(question: str, vectorstore) -> list[tuple[
     en conditions réelles). `fetch_k` égal au nombre total de vecteurs :
     le filtre doit porter sur l'index ENTIER, pas seulement sur les voisins
     sémantiques les plus proches (piège déjà rencontré à l'étape 3).
+
+    Le filtre de date couvre en réalité une PÉRIODE, pas seulement une date
+    exacte (voir _detecter_periode_dans_question) : une date ponctuelle
+    ('16 novembre') reste un cas particulier de plage (date, date), mais
+    'aujourd'hui', 'ce week-end', 'entre le 1er et le 15 octobre' sont
+    maintenant couverts par le même chemin.
 
     Chaque résultat est tagué `est_hybride=True` — utilisé plus loin pour
     lui garantir une place indépendamment de son score sémantique (souvent
@@ -423,11 +576,12 @@ def _recherche_hybride_complementaire(question: str, vectorstore) -> list[tuple[
         )
         resultats += [(doc, score, True) for doc, score in bruts]
 
-    date_detectee = _detecter_date_dans_question(question)
-    if date_detectee:
+    periode = _detecter_periode_dans_question(question)
+    if periode:
+        date_min, date_max = periode
         bruts = vectorstore.similarity_search_with_score(
             question, k=n, fetch_k=n,
-            filter=lambda meta: (meta.get("date_start") or "")[:10] == date_detectee,
+            filter=lambda meta: _chevauche_periode(meta, date_min, date_max),
         )
         resultats += [(doc, score, True) for doc, score in bruts]
 
@@ -503,20 +657,63 @@ def _rechercher_et_dedupliquer(question: str) -> list[tuple[Document, float, boo
     return _dedupe_par_evenement(fusion, config.RAG_MAX_EVENTS)
 
 
+def _statut_temporel(metadata: dict) -> str | None:
+    """Calcule en Python si un événement est [À VENIR], [EN COURS] ou
+    [TERMINÉ] par rapport à aujourd'hui — plutôt que de laisser Mistral
+    comparer lui-même une date de fin qu'il doit d'abord repérer dans du
+    texte libre. Ajoutée le 30/07/2026 suite à un cas réel observé sur
+    l'évaluation (QA_annotees.json, question sur des cours de danse) : des
+    cours terminés depuis juin étaient présentés comme "encore accessibles"
+    -- seule date_start (largement dans le passé, mais pas la date qui
+    compte pour juger si un événement À PLAGE est encore valide) était
+    exposée dans le contexte structuré, la date de fin réelle n'existant
+    que noyée dans le texte libre de la description.
+
+    Renvoie None si date_start est absente (ne devrait pas arriver en
+    pratique, mais évite de planter dessus)."""
+    debut = (metadata.get("date_start") or "")[:10]
+    if not debut:
+        return None
+    fin = (metadata.get("date_end") or debut)[:10]
+
+    aujourdhui = date.today().isoformat()
+    if fin < aujourdhui:
+        return "TERMINÉ"
+    if debut > aujourdhui:
+        return "À VENIR"
+    return "EN COURS"
+
+
 def _formater_contexte(scored_docs: list[tuple[Document, float, bool]]) -> str:
     """Transforme la liste d'événements trouvés en texte lisible, inséré
-    dans le prompt envoyé à Mistral. Un événement par paragraphe numéroté."""
+    dans le prompt envoyé à Mistral. Un événement par paragraphe numéroté.
+
+    Chaque événement est annoté [À VENIR]/[EN COURS]/[TERMINÉ] (calculé par
+    _statut_temporel, PAS laissé à la charge du modèle -- voir SYSTEM_PROMPT,
+    qui instruit Mistral à se fier à cette annotation plutôt qu'à recalculer
+    lui-même à partir des dates brutes). La date de fin est également
+    affichée explicitement quand elle diffère de la date de début -- avant
+    ce correctif, elle n'existait que dans le texte libre de la description,
+    jamais dans le bloc structuré (cf. discussion du 30/07/2026)."""
     if not scored_docs:
         return "(aucun événement trouvé)"
 
     blocs = []
     for i, (doc, _score, _est_hybride) in enumerate(scored_docs, start=1):
         m = doc.metadata
-        bloc = (
-            f"{i}. {m.get('title', '?')}\n"
-            f"   Date : {(m.get('date_start') or '?')[:10]}\n"
-            f"   Lieu : {m.get('city', '?')}"
-        )
+        statut = _statut_temporel(m)
+        titre_ligne = f"{i}. {m.get('title', '?')}"
+        if statut:
+            titre_ligne += f" [{statut}]"
+
+        date_debut = (m.get("date_start") or "?")[:10]
+        date_fin = (m.get("date_end") or "")[:10]
+
+        bloc = f"{titre_ligne}\n   Date : {date_debut}"
+        if date_fin and date_fin != date_debut:
+            bloc += f" (jusqu'au {date_fin})"
+        bloc += f"\n   Lieu : {m.get('city', '?')}"
+
         if m.get("conditions"):
             bloc += f"\n   Conditions : {m['conditions']}"
         bloc += f"\n   Détails : {doc.page_content}"
