@@ -17,4 +17,7 @@ vector_store/
 
 # Scripts de vérification et fichiers de vocabulaire
 temp_check.py
-vocabulaire_complet.txtevaluation/rapports/
+vocabulaire_complet.txt
+
+# Fichiers de rapports d'évaluation
+evaluation/rapports/
