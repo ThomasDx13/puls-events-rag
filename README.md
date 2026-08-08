@@ -14,7 +14,7 @@ Stack : **LangChain** (orchestration) · **Mistral** (LLM + embeddings) ·
 - Python 3.10 ou supérieur (testé avec Python 3.12 et 3.14)
 - pip
 - Une clé API Mistral (à obtenir sur [console.mistral.ai](https://console.mistral.ai)) —
-  nécessaire à partir de l'étape d'intégration du LLM, pas pour cette étape 1.
+  nécessaire à partir de l'étape d'intégration du LLM.
 
 ## 2. Installation de l'environnement
 
@@ -85,13 +85,6 @@ pip install -r requirements.in
 pip freeze > requirements.txt
 ```
 
-### ⚠️ Point de vigilance corrigé
-
-La brief mentionnait `pip install ... mistral`. Ce nom de package **n'est pas
-le bon** : le SDK officiel Mistral sur PyPI se nomme **`mistralai`**, et
-l'intégration LangChain officielle s'appelle **`langchain-mistralai`**. C'est
-ce qui a été installé ici.
-
 ### Note pour la suite
 
 `langchain-community` affiche un avertissement de dépréciation (le mainteneur
@@ -105,20 +98,8 @@ utilisé plus tard, il faudra vérifier s'il existe une alternative dédiée.
 venv) semble bloqué / très lent, notamment sur l'import de `langchain_mistralai`
 ou `httpx`.**
 
-C'est l'antivirus (Windows Defender ou équivalent) qui scanne chaque nouveau
-fichier du venv à son premier accès — un venv installe plusieurs milliers de
-petits fichiers d'un coup. Une fois le scan fait, les exécutions suivantes
-sont normales. Si c'est trop long ou bloque vraiment :
-- Relancer simplement le script une seconde fois.
-- Si ça persiste, exclure le dossier du projet du scan temps réel :
-  Windows Sécurité → Protection contre les virus et menaces → Gérer les
-  paramètres → Exclusions → Ajouter un dossier (le dossier du projet).
-
-**Éviter aussi de placer le projet dans un dossier synchronisé par
-OneDrive/Google Drive/Dropbox** (ex. `Bureau`, `Documents` si la synchronisation
-est activée dessus) : un venv contient trop de petits fichiers pour ces
-outils de synchronisation, ce qui peut causer des lenteurs ou blocages
-similaires, voire des erreurs liées à la limite de longueur de chemin Windows.
+Une fois le scan fait, les exécutions suivantes
+sont normales. Si c'est trop long ou bloque vraiment, relancer simplement le script une seconde fois.
 
 ## 6. Extraction, vectorisation et tests (étape 2)
 
@@ -130,7 +111,7 @@ occurrence a commencé il y a moins d'un an (couvre l'historique récent et les
 [`evenements-publics-openagenda`](https://public.opendatasoft.com/explore/dataset/evenements-publics-openagenda)
 sur Opendatasoft.
 
-**1. Valider le schéma de l'API (à faire une fois si tu repars de zéro)**
+**1. Valider le schéma de l'API (pas nécessaire systématiquement)**
 
 ```bash
 python -m src.fetch_raw_data --discover
@@ -139,8 +120,7 @@ python -m src.fetch_raw_data --discover
 Affiche un événement brut complet avec tous ses champs. Les noms de champs
 utilisés dans `src/config.py` (`FIELD_TITLE`, `FIELD_LOCATION_CITY`, etc.) ont
 été confirmés le 16/07/2026 sur un enregistrement réel (voir le commentaire en
-tête du bloc `FIELD_*` dans `config.py` pour le détail). Si tu modifies le
-périmètre ou que l'API évolue, relance `--discover` pour vérifier que rien n'a
+tête du bloc `FIELD_*` dans `config.py` pour le détail). À utiliser en cas de modifiaction du périmètre ou si l'API évolue, relancer `--discover` pour vérifier que rien n'a
 changé côté schéma avant de lancer une extraction complète.
 
 **2. Extraction complète**
@@ -567,8 +547,8 @@ version.
    confirmé sur 424 faux positifs réels avant correctif.
 
 **Résultat vérifié** (19/07/2026, question "Un concert de musique métal à
-Bordeaux ?") : les 5 vrais concerts metal de la base (ASHEN, SOIRÉE METAL,
-Slipknot tribute, ANTHRAX, IGORRR, ULTRA VOMIT) sont désormais tous détectés
+Bordeaux ?") : 5 des vrais concerts metal de la base (SOIRÉE METAL,
+Slipknot tribute, ANTHRAX, IGORRR, Seven eyed crows) sont désormais détectés
 et correctement recommandés par Mistral, qui ignore sans exception les
 résultats "bruit" (musique classique, fêtes...) toujours présents dans le
 contexte via les 5 emplacements sémantiques restants.
@@ -686,7 +666,7 @@ verrait pas du tout. `df(mot)` compté par événement UNIQUE (dédoublonné par
 `uid`), pas par chunk (contrairement à 8.4 — corrigé dès l'écriture de ce
 code neuf, l'ancien choix n'a pas été retouché).
 
-**Leçon apprise en testant (27/07/2026), à noter honnêtement** : une
+**Leçon apprise en testant (27/07/2026)** : une
 première version sans liste de mots vides (stopwords) supposait que l'IDF
 suffirait à neutraliser les mots de liaison ("de", "la"...) automatiquement.
 Faux sur ce corpus : un test synthétique a montré que "de" garde un IDF non
@@ -717,11 +697,11 @@ les résultats *purement sémantiques* (hors hybride) restent dominés par des
 événements dont le titre contient "concert"/"musique" au sens large (déjà
 identifiés le 19/07 comme trop génériques pour le filtre hybride, mais la
 table IDF de la fusion lexicale ne "connaît" pas cette leçon-là — deux
-mécanismes de généricité distincts dans le même fichier). Cause précise non
-confirmée : soit ces mots ont un IDF trop faible pour être neutralisés,
+mécanismes de généricité (à quel point un mot est "trop commun/partagé pour 
+être utile comme signal de pertinence") distincts dans le même fichier). 
+Cause précise nonconfirmée : soit ces mots ont un IDF trop faible pour être neutralisés,
 soit le lot brut Faiss (même élargi à 100) ne contient simplement aucun
-autre événement metal à ce rang. Test de diagnostic proposé
-(`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
+autre événement metal à ce rang.
 
 ### 8.9 Interface web (Streamlit)
 
@@ -793,8 +773,7 @@ streamlit run streamlit_app.py
   par des événements dont le titre contient ces mots au sens large — la
   table IDF de la fusion (8.8) ne "connaît" pas la leçon du 19/07 sur ces
   mots-clés trop génériques (deux mécanismes de généricité distincts dans
-  le même fichier). Cause précise non confirmée à ce stade — diagnostic
-  proposé (`RAG_POIDS_BONUS_LEXICAL = 0` temporaire) pas encore effectué.
+  le même fichier). Cause précise non confirmée à ce stade.
 
 ## 9. Évaluation du chatbot (étape 5)
 
@@ -937,8 +916,6 @@ puls-events-rag/
 │   ├── QA_annotees.json        # jeu de questions/réponses annotées (9.2)
 │   ├── evaluate_chatbot.py     # script d'évaluation (9.3)
 │   └── rapports/                # rapports Markdown horodatés (non versionné)
-├── notebooks/             # explorations ponctuelles
-├── reports/               # rapport technique, présentation
 ├── requirements.in         # dépendances directes (lisible)
 ├── requirements.txt        # lock complet (pip freeze)
 ├── .env.example            # modèle pour MISTRAL_API_KEY / HF_TOKEN
@@ -954,6 +931,3 @@ puls-events-rag/
 - [x] Étape 3 — Indexation Faiss + vérifications d'efficacité/rapidité : 12 643 vecteurs indexés, recherche en 16,33 ms — détail en section 7
 - [x] Étape 4 — Pipeline RAG (retrieval hybride + génération Mistral, chaînes LCEL) — détail en section 8
 - [x] Étape 5 — Jeu de test annoté (questions/réponses) : 13 questions, similarité cosinus + LLM-juge + garde-fou, plusieurs bugs de récupération/temporalité trouvés et corrigés — détail en section 9
-- [ ] Étape 6 — Rapport technique
-- [ ] Étape 7 — Présentation PowerPoint
-- [ ] Étape 8 — Démo live
